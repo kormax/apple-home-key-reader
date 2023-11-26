@@ -2,7 +2,7 @@ from enum import Enum, IntEnum
 from typing import Collection, List, Union
 
 from util.generic import int_to_bytes
-from util.structable import Packable, Unpackable, pack, represent
+from util.structable import PackableData, Packable, Unpackable, pack, represent
 
 
 def try_cast_type(value: bytes, type):
@@ -224,9 +224,9 @@ class BERTLVLength(Packable, Unpackable):
 class BERTLV(TLV, Packable, Unpackable):
     tag: BERTLVTag
     length: BERTLVLength
-    value: Union[bytes, List["BERTLV"]]
+    value: PackableData
 
-    def __init__(self, tag, length=None, value: Union[bytes, list] = b""):
+    def __init__(self, tag, length=None, value: PackableData = b""):
         tag = BERTLVTag(tag) if isinstance(tag, int) else tag
         length = length or len(pack(value))
         length = BERTLVLength(length) if isinstance(length, int) else length
@@ -290,7 +290,7 @@ class BERTLV(TLV, Packable, Unpackable):
 class TLV8(TLV, Packable, Unpackable):
     tag: int
     length: int
-    value: Union[bytes, bytearray, Packable, List[Packable]]
+    value: PackableData
 
     def __init__(self, tag, value) -> None:
         self.tag = tag

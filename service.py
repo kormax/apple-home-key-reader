@@ -103,7 +103,7 @@ class Service:
         try:
             log.info(f"Got NFC tag {target}")
             tag = ISO7816Tag(target)
-            new_issuers_state, endpoint = read_homekey(
+            result_flow, new_issuers_state, endpoint = read_homekey(
                 tag,
                 issuers=self.repository.get_all_issuers(),
                 preferred_versions=[b"\x02\x00"],
@@ -118,7 +118,7 @@ class Service:
             if new_issuers_state is not None and len(new_issuers_state):
                 self.repository.upsert_issuers(new_issuers_state)
 
-            log.info(f"Authenticated endpoint {endpoint}")
+            log.info(f"Authenticated endpoint via {result_flow!r}: {endpoint}")
 
             end = time.monotonic()
             log.info(f"Transaction took {(end - start) * 1000} ms")

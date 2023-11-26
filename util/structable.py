@@ -12,9 +12,9 @@ Packable = ForwardRef("Packable")
 T = TypeVar("T")
 
 
-PackableData = Union[
-    Packable, bytearray, bytes, Iterator[int], str, int, Tuple[..., bytes]
-]
+PackableBase = Union[bytes, bytearray, memoryview, str, int, Packable]
+
+PackableData = Union[PackableBase, Collection[PackableBase]]
 UnpackableData = Union[bytes, bytearray, Collection[int]]
 
 
@@ -44,6 +44,8 @@ def pack(data: PackableData, *, byteorder="big", signed=False) -> bytes:
         return data.pack()
     elif isinstance(data, bytes):
         return data
+    elif isinstance(data, memoryview):
+        return bytes(data)
     elif isinstance(data, str):
         return data.encode()
     elif isinstance(data, bytearray):

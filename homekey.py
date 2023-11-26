@@ -6,6 +6,7 @@ import time
 from typing import Collection, List, Optional, Tuple
 
 import cbor2
+from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec, ed25519
 from cryptography.hazmat.primitives.asymmetric.utils import (
@@ -32,8 +33,8 @@ from util.digital_key import (
     DigitalKeyTransactionType,
 )
 from util.generic import chunked, get_tlv_tag
-from util.iso7816 import ISO7816, ISO7816Application, ISO7816Command, ISO7816Tag
 from util.iso18013 import ISO18013SecureContext
+from util.iso7816 import ISO7816, ISO7816Application, ISO7816Command, ISO7816Tag
 from util.ndef import NDEFMessage, NDEFRecord
 from util.structable import pack
 from util.tlv import BERTLV as TLV
@@ -67,6 +68,16 @@ def get_endpoints_from_issuers(issuers: List[Issuer]):
     return (e for i in issuers for e in i.endpoints)
 
 
+def generate_ec_key_if_provided_is_none(
+    private_key: Optional[ec.EllipticCurvePrivateKey],
+):
+    return (
+        ec.derive_private_key(int.from_bytes(private_key, "big"), ec.SECP256R1())
+        if private_key
+        else ec.generate_private_key(ec.SECP256R1())
+    )
+
+
 def get_key_material_generator(
     reader_ephemeral_private_key: ec.EllipticCurvePrivateKey,
     endpoint_ephemeral_public_key: ec.EllipticCurvePublicKey,
@@ -74,7 +85,7 @@ def get_key_material_generator(
     interface: int,
     flags: bytes,
     protocol_version: bytes,
-    device_protocol_versions: bytes,
+    device_protocol_versions: List[bytes],
 ):
     reader_ephemeral_public_key = reader_ephemeral_private_key.public_key()
 
@@ -125,14 +136,14 @@ def get_key_material_generator(
 
 def fast_auth(
     tag: ISO7816Tag,
-    device_protocol_versions,
-    protocol_version,
-    interface,
-    flags,
-    reader_identifier,
-    reader_public_key,
-    reader_ephemeral_public_key,
-    transaction_identifier,
+    device_protocol_versions: List[bytes],
+    protocol_version: bytes,
+    interface: int,
+    flags: bytes,
+    reader_identifier: bytes,
+    reader_public_key: ec.EllipticCurvePublicKey,
+    reader_ephemeral_public_key: ec.EllipticCurvePublicKey,
+    transaction_identifier: bytes,
     issuers: List[Issuer],
     key_size=16,
 ) -> Tuple[
@@ -177,7 +188,7 @@ def fast_auth(
         return endpoint_ephemeral_public_key, None, None
 
     endpoint = None
-    # FAST gives us no way to find out the identity of endpoint from the data for security reasons
+    # FAST gives us no way to find out the identity of endpoint from the data for security reasons,
     # so we have to iterate over all provisioned endpoints and hope that it's there
     for endpoint in get_endpoints_from_issuers(issuers):
         k_persistent = endpoint.persistent_key
@@ -233,17 +244,17 @@ def fast_auth(
 
 
 def standard_auth(
-    tag,
-    device_protocol_versions,
-    protocol_version,
-    interface,
-    flags,
-    reader_identifier,
-    reader_ephemeral_private_key,
-    reader_private_key,
-    transaction_identifier,
-    endpoint_ephemeral_public_key,
-    issuers,
+    tag: ISO7816Tag,
+    device_protocol_versions: List[bytes],
+    protocol_version: bytes,
+    interface: int,
+    flags: bytes,
+    reader_identifier: bytes,
+    reader_ephemeral_private_key: ec.EllipticCurvePrivateKey,
+    reader_private_key: ec.EllipticCurvePrivateKey,
+    transaction_identifier: bytes,
+    endpoint_ephemeral_public_key: ec.EllipticCurvePublicKey,
+    issuers: List[Issuer],
     key_size=16,
 ) -> Tuple[Optional[bytes], Optional[Endpoint], Optional[DigitalKeySecureContext]]:
     reader_ephemeral_public_key = reader_ephemeral_private_key.public_key()
@@ -309,7 +320,7 @@ def standard_auth(
 
     try:
         response, secure.counter = secure.decrypt_response(response)
-    except (Exception,):
+    except (AssertionError,):
         log.info("AUTH1 COULD NOT DECRYPT RESPONSE")
         return k_persistent, None, None
 
@@ -321,17 +332,13 @@ def standard_auth(
 
     log.info(f"{device_identifier.hex()=}")
 
-    try:
-        log.info("Going to find endpoint")
-        endpoint = find_endpoint_by_id_in_issuers(issuers, device_identifier)
-        if endpoint is None:
-            raise ValueError("Endpoint is None")
-        endpoint_public_key = endpoint.public_key
-    except (ValueError, KeyError):
+    endpoint = find_endpoint_by_id_in_issuers(issuers, device_identifier)
+    if endpoint is None:
+        log.info("Could not find matching endpoint")
         return k_persistent, None, secure
 
     endpoint_public_key: ec.EllipticCurvePublicKey = load_ec_public_key_from_bytes(
-        endpoint_public_key
+        endpoint.public_key
     )
 
     log.info(f"{signature.hex()=}")
@@ -353,215 +360,14 @@ def standard_auth(
         endpoint_public_key.verify(
             signature, verification_hash_input, ec.ECDSA(hashes.SHA256())
         )
-
-        log.info("SIGNATURE VERIFIED")
-        return k_persistent, endpoint, secure
-    except Exception as e:
-        log.info(f"SIGNATURE DID NOT MATCH {e}")
+    except InvalidSignature as e:
+        log.info(f"Signature data does not match {e}")
     return k_persistent, endpoint, secure
 
 
-def read_homekey(
-    tag: ISO7816Tag,
-    reader_identifier: bytes,
-    reader_private_key: bytes,
-    issuers: List[Issuer],
-    preferred_versions: Collection[bytes] = [],
-    flow=DigitalKeyFlow.FAST,
-    transaction_code: DigitalKeyTransactionType = DigitalKeyTransactionType.UNLOCK,
-    # Generated at random if not provided
-    reader_ephemeral_private_key: Optional[bytes] = None,
-    # Generated at random if not provided
-    transaction_identifier: Optional[bytes] = None,
-    # Generated at random if not provided
-    attestation_exchange_common_secret: Optional[bytes] = None,
-    interface=Interface.CONTACTLESS,
-    key_size=16,
-) -> Tuple[List[Issuer], Optional[Endpoint]]:
-    """
-    Returns a list representing new configured issuer state
-    and an optional endpoint in case authentication has been successful
-    """
-    if flow <= DigitalKeyFlow.FAST:
-        transaction_flags = {DigitalKeyTransactionFlags.FAST}
-    else:
-        transaction_flags = {DigitalKeyTransactionFlags.STANDARD}
-
-    command = ISO7816.select_aid(ISO7816Application.HOME_KEY.value)
-    log.info(f"SELECT CMD = {command}")
-    response = tag.transceive(command)
-    if response.sw != (0x90, 0x00):
-        raise ProtocolError(
-            f"Could not select HomeKey {hex(response.sw1)} {hex(response.sw2)}"
-        )
-    log.info(f"SELECT RES = {response}")
-    tlv_array = TLV.unpack_array(response.data)
-    log.info(f"{reader_identifier.hex()=}")
-    device_protocol_versions = [ver for ver in chunked(get_tlv_tag(tlv_array, 0x5C), 2)]
-
-    reader_private_key: ec.EllipticCurvePrivateKey = ec.derive_private_key(
-        int.from_bytes(reader_private_key, "big"), ec.SECP256R1()
-    )
-    reader_public_key = reader_private_key.public_key()
-    reader_public_key_x, reader_public_key_y = get_ec_key_public_points(
-        reader_public_key
-    )
-    log.info(
-        f"Reader public key: x={reader_public_key_x.hex()} y={reader_public_key_y.hex()}"
-    )
-
-    reader_ephemeral_private_key: ec.EllipticCurvePrivateKey = (
-        ec.derive_private_key(
-            int.from_bytes(reader_ephemeral_private_key, "big"), ec.SECP256R1()
-        )
-        if reader_ephemeral_private_key
-        else ec.generate_private_key(ec.SECP256R1())
-    )
-    reader_ephemeral_public_key = reader_ephemeral_private_key.public_key()
-
-    for preferred_version in preferred_versions:
-        if preferred_version in device_protocol_versions:
-            protocol_version = preferred_version
-            log.info(f"Choosing preferred version {protocol_version}")
-            break
-    else:
-        protocol_version = device_protocol_versions[0]
-        log.info(f"Defaulting to the newest available version {protocol_version}")
-
-    if protocol_version != b"\x02\x00":
-        raise ProtocolError("Only officially supported protocol version is 0200")
-
-    log.info(f"{protocol_version.hex()=}")
-
-    transaction_identifier = transaction_identifier or os.urandom(16)
-
-    flags = bytes([sum(transaction_flags), transaction_code])
-
-    endpoint_ephemeral_public_key, endpoint, secure = fast_auth(
-        tag=tag,
-        device_protocol_versions=device_protocol_versions,
-        protocol_version=protocol_version,
-        interface=interface,
-        flags=flags,
-        reader_identifier=reader_identifier,
-        reader_public_key=reader_public_key,
-        reader_ephemeral_public_key=reader_ephemeral_public_key,
-        transaction_identifier=transaction_identifier,
-        issuers=issuers,
-        key_size=key_size,
-    )
-    authenticated = secure is not None
-    log.info(f"FAST {authenticated=}")
-
-    if not authenticated or flow >= DigitalKeyFlow.STANDARD:
-        k_persistent, endpoint, secure = standard_auth(
-            tag=tag,
-            device_protocol_versions=device_protocol_versions,
-            protocol_version=protocol_version,
-            interface=interface,
-            flags=flags,
-            transaction_identifier=transaction_identifier,
-            reader_identifier=reader_identifier,
-            reader_private_key=reader_private_key,
-            reader_ephemeral_private_key=reader_ephemeral_private_key,
-            issuers=issuers,
-            endpoint_ephemeral_public_key=endpoint_ephemeral_public_key,
-            key_size=key_size,
-        )
-        authenticated = secure is not None
-        log.info(f"STANDARD {endpoint} {authenticated=} {k_persistent.hex()=}")
-        if endpoint is not None and k_persistent is not None:
-            endpoint.persistent_key = k_persistent
-
-    should_exchange_attestation = flow >= DigitalKeyFlow.ATTESTATION
-    if should_exchange_attestation or (endpoint is None or not authenticated):
-        attestation_exchange_common_secret = (
-            attestation_exchange_common_secret or os.urandom(32)
-        )
-        log.info(f"{attestation_exchange_common_secret.hex()=}")
-        # Notify OS about intent of exchanging attestation, provide common secret
-        operation = TLV(0x8E, value=TLV(0xC0, value=attestation_exchange_common_secret))
-        should_exchange_attestation = mailbox_operation(
-            tag, secure, mailbox_operations=(operation,)
-        )
-
-    if should_exchange_attestation:
-        command = ISO7816Command(
-            cla=0x80, ins=0x3C, p1=0x40, p2=0xA0, data=None, le=None
-        )
-        log.info(f"OP_CONTROL_FLOW CMD = {command}")
-        response = tag.transceive(command)
-        log.info(f"OP_CONTROL_FLOW RES = {response}")
-        attestation_package = exchange_attestation(
-            tag, attestation_exchange_common_secret
-        )
-        log.info(f"{attestation_package=}")
-
-        attestation_package_cbor = cbor2.loads(attestation_package)
-        issuer_signed_cbor = attestation_package_cbor["documents"][0]["issuerSigned"][
-            "issuerAuth"
-        ]
-        protected_headers, unprotected_headers, data, signature = issuer_signed_cbor
-        issuer_id = unprotected_headers[4]
-        data_cbor = cbor2.loads(cbor2.loads(data).value)
-        device_key_info = data_cbor["deviceKeyInfo"]["deviceKey"]
-        device_public_key_x, device_public_key_y = (
-            device_key_info[-2],
-            device_key_info[-3],
-        )
-        device_public_key_bytes = (
-            bytes.fromhex("04") + device_public_key_x + device_public_key_y
-        )
-
-        issuer = find_issuer_by_id(issuers, id=issuer_id)
-
-        public_key = ed25519.Ed25519PublicKey.from_public_bytes(issuer.public_key)
-
-        data_to_sign = cbor2.dumps([COSE_CONTEXT, protected_headers, COSE_AAD, data])
-        public_key.verify(signature, data_to_sign)
-
-        log.info("Attestation signature is valid ")
-
-        if endpoint is None:
-            endpoint = Endpoint(
-                last_used_at=0,
-                counter=0,
-                key_type=KeyType.SECP256R1,
-                public_key=device_public_key_bytes,
-                persistent_key=k_persistent or os.urandom(32),
-                enrollments=Enrollments(hap=None, attestation=None),
-            )
-        endpoint.enrollments.attestation = Enrollment(
-            at=int(time.time()),
-            payload=base64.b64encode(attestation_package).decode(),
-        )
-        issuer.endpoints.append(endpoint)
-
-    else:
-        command = ISO7816Command(
-            cla=0x80, ins=0x3C, p1=0x01, p2=0x00, data=None, le=None
-        )
-        log.info(f"OP_CONTROL_FLOW CMD = {command}")
-        response = tag.transceive(command)
-        log.info(f"OP_CONTROL_FLOW RES = {response}")
-
-    if authenticated and endpoint is not None:
-        endpoint.last_used_at = int(time.time())
-        endpoint.counter += 1
-
-    return issuers, endpoint
-
-
-def exchange_attestation(tag, shared_secret: bytes):
-    command = ISO7816.select_aid(ISO7816Application.HOME_KEY_CONFIGURATION)
-    log.info(f"SELECT CMD = {command}")
-    response = tag.transceive(command)
-    log.info(f"SELECT RES = {response}")
-    if response.sw != (0x90, 0x00):
-        log.info(
-            f"Could not select HomeKey Configuration {hex(response.sw1)[2:].zfill(2)} {hex(response.sw2)[2:].zfill(2)}"
-        )
-        return
+def exchange_attestation(tag: ISO7816Tag, shared_secret: bytes):
+    """Performs attestation exchange, returns attestation package"""
+    _ = select_applet(tag, ISO7816Application.HOME_KEY_CONFIGURATION)
 
     envelope1_engagement_message = NDEFMessage(
         [
@@ -683,7 +489,9 @@ def exchange_attestation(tag, shared_secret: bytes):
     return endpoint_cbor_plaintext
 
 
-def mailbox_operation(tag, secure, mailbox_operations: List[TLV] = None):
+def mailbox_exchange(
+    secure: DigitalKeySecureContext, mailbox_operations: Collection[TLV] = None
+):
     command_tlv = [
         0x00,
         *(mailbox_operations or []),
@@ -697,6 +505,240 @@ def mailbox_operation(tag, secure, mailbox_operations: List[TLV] = None):
 
     response = secure.transceive(command)
     log.info(f"EXCHANGE RESPONSE {response}")
-    assert response.sw1 == 0x90
+    if response.sw1 != 0x90:
+        raise ProtocolError(f"Mailbox exchange failed")
+    return response.data
 
-    return True
+
+def select_applet(tag: ISO7816Tag, applet=ISO7816Application.HOME_KEY):
+    command = ISO7816.select_aid(applet)
+    log.info(f"SELECT CMD = {command}")
+    response = tag.transceive(command)
+    if response.sw != (0x90, 0x00):
+        raise ProtocolError(
+            f"Could not select {applet} {hex(response.sw1)} {hex(response.sw2)}"
+        )
+    log.info(f"SELECT RES = {response}")
+    return response.data
+
+
+def control_flow(tag: ISO7816Tag, p1=0x01, p2=0x00):
+    command = ISO7816Command(cla=0x80, ins=0x3C, p1=p1, p2=p2, data=None, le=None)
+    log.info(f"OP_CONTROL_FLOW CMD = {command}")
+    response = tag.transceive(command)
+    log.info(f"OP_CONTROL_FLOW RES = {response}")
+    return response.data
+
+
+def perform_authentication_flow(
+    tag: ISO7816Tag,
+    flow: DigitalKeyFlow,
+    reader_identifier: bytes,
+    reader_private_key: ec.EllipticCurvePrivateKey,
+    reader_ephemeral_private_key: ec.EllipticCurvePrivateKey,
+    attestation_exchange_common_secret: bytes,
+    protocol_version: bytes,
+    device_protocol_versions: List[bytes],
+    transaction_identifier: bytes,
+    flags: bytes,
+    interface: int,
+    issuers: List[Issuer],
+    key_size=16,
+) -> Tuple[DigitalKeyFlow, Optional[Issuer], Optional[Endpoint]]:
+    """Returns an Endpoint if one was found and successfully authenticated.
+    Returns an Issuer if endpoint was authenticated via Attestation"""
+    reader_public_key = reader_private_key.public_key()
+    reader_public_key_x, reader_public_key_y = get_ec_key_public_points(
+        reader_public_key
+    )
+    log.info(
+        f"Reader public key: x={reader_public_key_x.hex()} y={reader_public_key_y.hex()}"
+    )
+
+    reader_ephemeral_public_key = reader_ephemeral_private_key.public_key()
+
+    log.info(f"{protocol_version.hex()=}")
+
+    endpoint_ephemeral_public_key, endpoint, secure = fast_auth(
+        tag=tag,
+        device_protocol_versions=device_protocol_versions,
+        protocol_version=protocol_version,
+        interface=interface,
+        flags=flags,
+        reader_identifier=reader_identifier,
+        reader_public_key=reader_public_key,
+        reader_ephemeral_public_key=reader_ephemeral_public_key,
+        transaction_identifier=transaction_identifier,
+        issuers=issuers,
+        key_size=key_size,
+    )
+    authenticated = secure is not None
+    log.info(f"FAST {authenticated=}")
+
+    if authenticated and flow <= DigitalKeyFlow.FAST:
+        return DigitalKeyFlow.FAST, None, endpoint
+
+    k_persistent, endpoint, secure = standard_auth(
+        tag=tag,
+        device_protocol_versions=device_protocol_versions,
+        protocol_version=protocol_version,
+        interface=interface,
+        flags=flags,
+        transaction_identifier=transaction_identifier,
+        reader_identifier=reader_identifier,
+        reader_private_key=reader_private_key,
+        reader_ephemeral_private_key=reader_ephemeral_private_key,
+        issuers=issuers,
+        endpoint_ephemeral_public_key=endpoint_ephemeral_public_key,
+        key_size=key_size,
+    )
+    authenticated = secure is not None
+    log.info(f"STANDARD {endpoint} {authenticated=} {k_persistent.hex()=}")
+    if endpoint is not None and k_persistent is not None:
+        endpoint.persistent_key = k_persistent
+
+    if authenticated and flow <= DigitalKeyFlow.STANDARD:
+        return DigitalKeyFlow.STANDARD, None, endpoint
+
+    log.info(f"{attestation_exchange_common_secret.hex()=}")
+    # Notify OS about intent of exchanging attestation, provide common secret
+    operation = TLV(0x8E, value=TLV(0xC0, value=attestation_exchange_common_secret))
+    _ = mailbox_exchange(secure, mailbox_operations=(operation,))
+
+    control_flow(tag, 0x40, 0xA0)
+
+    attestation_package = exchange_attestation(tag, attestation_exchange_common_secret)
+    log.info(f"{attestation_package=}")
+
+    attestation_package_cbor = cbor2.loads(attestation_package)
+    issuer_signed_cbor = attestation_package_cbor["documents"][0]["issuerSigned"][
+        "issuerAuth"
+    ]
+    protected_headers, unprotected_headers, data, signature = issuer_signed_cbor
+    issuer_id = unprotected_headers[4]
+    data_cbor = cbor2.loads(cbor2.loads(data).value)
+    device_key_info = data_cbor["deviceKeyInfo"]["deviceKey"]
+    device_public_key_x, device_public_key_y = (
+        device_key_info[-2],
+        device_key_info[-3],
+    )
+    device_public_key_bytes = (
+        bytes.fromhex("04") + device_public_key_x + device_public_key_y
+    )
+
+    issuer = find_issuer_by_id(issuers, id=issuer_id)
+    if issuer is None:
+        raise ProtocolError(f"Could not find issuer {issuer_id}")
+
+    public_key = ed25519.Ed25519PublicKey.from_public_bytes(issuer.public_key)
+
+    data_to_sign = cbor2.dumps([COSE_CONTEXT, protected_headers, COSE_AAD, data])
+
+    try:
+        public_key.verify(signature, data_to_sign)
+    except InvalidSignature:
+        log.info("Attestation signature is invalid ")
+        return DigitalKeyFlow.ATTESTATION, None, None
+
+    log.info(f"Attestation signature is valid {endpoint}")
+
+    return (
+        DigitalKeyFlow.ATTESTATION,
+        issuer,
+        endpoint
+        or Endpoint(
+            last_used_at=0,
+            counter=0,
+            key_type=KeyType.SECP256R1,
+            public_key=device_public_key_bytes,
+            persistent_key=k_persistent or os.urandom(32),
+            enrollments=Enrollments(
+                hap=None,
+                attestation=Enrollment(
+                    at=int(time.time()),
+                    payload=base64.b64encode(attestation_package).decode(),
+                ),
+            ),
+        ),
+    )
+
+
+def read_homekey(
+    tag: ISO7816Tag,
+    reader_identifier: bytes,
+    reader_private_key: bytes,
+    issuers: List[Issuer],
+    preferred_versions: Collection[bytes] = None,
+    flow=DigitalKeyFlow.FAST,
+    transaction_code: DigitalKeyTransactionType = DigitalKeyTransactionType.UNLOCK,
+    # Generated at random if not provided
+    reader_ephemeral_private_key: Optional[bytes] = None,
+    # Generated at random if not provided
+    transaction_identifier: Optional[bytes] = None,
+    # Generated at random if not provided
+    attestation_exchange_common_secret: Optional[bytes] = None,
+    interface=Interface.CONTACTLESS,
+    key_size=16,
+) -> Tuple[DigitalKeyFlow, List[Issuer], Optional[Endpoint]]:
+    """
+    Returns a list representing new configured issuer state
+    and an optional endpoint in case authentication has been successful
+    """
+
+    transaction_flags = {
+        DigitalKeyTransactionFlags.FAST
+        if flow <= DigitalKeyFlow.FAST
+        else DigitalKeyTransactionFlags.STANDARD
+    }
+    flags = bytes([sum(transaction_flags), transaction_code])
+
+    response = select_applet(tag, applet=ISO7816Application.HOME_KEY)
+    tlv_array = TLV.unpack_array(response)
+    log.info(f"{reader_identifier.hex()=}")
+    device_protocol_versions = [ver for ver in chunked(get_tlv_tag(tlv_array, 0x5C), 2)]
+    preferred_versions = preferred_versions or []
+    for preferred_version in preferred_versions:
+        if preferred_version in device_protocol_versions:
+            protocol_version = preferred_version
+            log.info(f"Choosing preferred version {protocol_version}")
+            break
+    else:
+        protocol_version = device_protocol_versions[0]
+        log.info(f"Defaulting to the newest available version {protocol_version}")
+    if protocol_version != b"\x02\x00":
+        raise ProtocolError("Only officially supported protocol version is 0200")
+
+    reader_private_key = ec.derive_private_key(
+        int.from_bytes(reader_private_key, "big"), ec.SECP256R1()
+    )
+
+    result_flow, issuer, endpoint = perform_authentication_flow(
+        tag=tag,
+        flow=flow,
+        reader_identifier=reader_identifier,
+        reader_private_key=reader_private_key,
+        reader_ephemeral_private_key=generate_ec_key_if_provided_is_none(
+            reader_ephemeral_private_key
+        ),
+        attestation_exchange_common_secret=attestation_exchange_common_secret
+        or os.urandom(32),
+        protocol_version=protocol_version,
+        device_protocol_versions=device_protocol_versions,
+        transaction_identifier=transaction_identifier or os.urandom(16),
+        flags=flags,
+        interface=interface,
+        issuers=issuers,
+        key_size=key_size,
+    )
+    if endpoint is not None:
+        endpoint.last_used_at = int(time.time())
+        endpoint.counter += 1
+
+    if issuer and endpoint not in get_endpoints_from_issuers(issuers):
+        issuer.endpoints.append(endpoint)
+
+    # Notify about transaction completion.
+    if result_flow != DigitalKeyFlow.ATTESTATION:
+        control_flow(tag)
+
+    return result_flow, issuers, endpoint
