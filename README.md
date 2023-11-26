@@ -7,22 +7,25 @@
 
 # Overview
 
-This project provides a POC of a virtual HomeKit Lock with fully functional Apple Home Key NFC authentication support and HAP configuration implemented in Python;
+This project provides a POC of an Apple Home Key Reader implemented in Python, including:
+* Fully functional Apple Home Key NFC authentication;
+* NFC Express mode support;
+* HAP configuration (as a virtual lock);
 
-**Beware that this project is not targeted towards end users**, as it doesn't implement Lock device as a whole, and it also has features (such as extra logs, storage of specific info) that were not intended for end users.  
+**Beware that this project is not targeted towards end users**, as it doesn't implement Lock device as a whole.  
 Instead, it's intended for makers and experienced developers who could help create more useful and user-friendly implementations based on the example provided here.
 
-Nevertheless, feel free to try it out :).
+In any case, feel free to try it out :).
 
 # Requirements
 
 Running this project requires the following:
 * Operating system - Linux, macOS;
 * Valid installation of Python 3.11 (earlier could work, untested);
-* A PN532 module connected to a PC via UART to USB adapter for NFC operation.
+* A PN532 module connected to a PC or SBC.
 * Ethernet or Wi-Fi for HAP to be able to be discovered.
 
-If using a PC. PN532 has to be connected to an UART adapter that is connected to PC in a following fashion:
+If using a PC, PN532 has to be connected to an UART adapter that is connected to PC in a following fashion:
 
 <p float="left">
   <img src="./assets/PN532.CONNECTION.DEMO.webp" alt="![Connecting PN532]" width=500px>
@@ -32,7 +35,7 @@ If using a PC. PN532 has to be connected to an UART adapter that is connected to
 # Installation & running
 
 Code has been tested using Python `3.11` on macOS, Linux should work too. Windows support status is unknown.  
-Older OS + Python version combos were not verified but may still work.
+Other OS + Python version combos were not verified but may still work.
 
 
 1. (Optionally). Create and activate a venv:
@@ -56,7 +59,8 @@ Older OS + Python version combos were not verified but may still work.
 
         # macOS
         ls /dev/tty.*
-       
+    3.2. Copy the port without the `tty.` part, insert it into `port` field;  
+    3.3. If you don't use a PN532, set `broadcast` to false and `driver` to appropriate value, otherwise leave as is.
 3. Run application:
     ```
     python3 main.py
@@ -80,8 +84,8 @@ Configuration is done via a JSON file `configuration.json`, with the following 4
     * `finish`: color of the home key art to display on your device. 
        Usually, finish of the first NFC lock added to your home defines which color the keys are going to be, even if more locks are added;  
        Possible values: `black` `tan` `gold` `silver`;
-    * `flow`: minimum digital key transaction level to force. By default `fast` code attempts to do as least actions as possible, with fallback to next level of authentication only happening if the previous one failed. Setting this setting to `standard` or `attestation` will force protocol to fall back to those flows even if they're not required for successful auth.  
-    Possible values `fast` `standard` `attestation`.
+    * `flow`: minimum viable digital key transaction flow do. By default reader attempts to do as least actions as possible, with fallback to next level of authentication only happening if the previous one failed. Setting this setting to `standard` or `attestation` will force protocol to fall back to those flows even if they're not required for successful auth.  
+    Possible values: `fast` `standard` `attestation`.
 
 
 # Project structure
@@ -134,18 +138,25 @@ In any case, feel free to create an issue to discuss potential improvements befo
 Codebase is formatted with default `black` and `isort` configurations, linted with `pylint`.  
 Before making a contribution, verify that, they were used for best code diffs and quality;
 
-**Beware** that raised issues won't be treated as feature requests.   
-You can also raise an issue if a bug is found in this code (not nfcpy, etc);
 
+# Notes
 
-# Thanks
+- This code is provided as-is. Considering the sensitive nature of authentication and security, I assume no responsibility for any issues that may arise while using this project;  
+- Information is provided here for learning and DIY purposes only, usage in commercial applications is highly discouraged.
+- Refrain from posting raw logs as they may contain sensitive information, such as reader private key, issuer id's and etc.
+- If you find a bug, feel free to raise an issue;
+
+# Credits
 
 This project would have been impossible without the contributions of:
 * [@kupa22](https://github.com/kupa22) - for full HAP part analysis, NFC protocol analysis;
-* [@gm3197](https://github.com/gm3197) - for finding clues about ISO18013 being used in Home Key protocol;
+* [@kormax](https://github.com/kormax) - ECP, NFC protocol analysis;  
 
 Special thanks to:
-* [@KhaosT](https://github.com/KhaosT/HAP-NodeJS/commit/80cdb1535f5bee874cc06657ef283ee91f258815) - for providing a demo of a virtual lock causing a Home Key to appear, which partially inspired me/others to go on this journey.
+* [@gm3197](https://github.com/gm3197) - for finding clues about ISO18013 being used in Home Key protocol;
+* [@KhaosT](https://github.com/KhaosT/HAP-NodeJS/commit/80cdb1535f5bee874cc06657ef283ee91f258815) - for providing a demo that caused Home Key to appear in Wallet, which partially inspired me/others to go on this journey;
+* @ikalchev and @bdraco for developing HAP-Python and helping with accepting in changes that were needed for this project;
+* Unnamed people who gave their input on demo app improvement.
 
 # References
 

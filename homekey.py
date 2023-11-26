@@ -572,10 +572,8 @@ def perform_authentication_flow(
         issuers=issuers,
         key_size=key_size,
     )
-    authenticated = secure is not None
-    log.info(f"FAST {authenticated=}")
 
-    if authenticated and flow <= DigitalKeyFlow.FAST:
+    if endpoint is not None and flow <= DigitalKeyFlow.FAST:
         return DigitalKeyFlow.FAST, None, endpoint
 
     k_persistent, endpoint, secure = standard_auth(
@@ -592,12 +590,11 @@ def perform_authentication_flow(
         endpoint_ephemeral_public_key=endpoint_ephemeral_public_key,
         key_size=key_size,
     )
-    authenticated = secure is not None
-    log.info(f"STANDARD {endpoint} {authenticated=} {k_persistent.hex()=}")
+
     if endpoint is not None and k_persistent is not None:
         endpoint.persistent_key = k_persistent
 
-    if authenticated and flow <= DigitalKeyFlow.STANDARD:
+    if endpoint is not None and flow <= DigitalKeyFlow.STANDARD:
         return DigitalKeyFlow.STANDARD, None, endpoint
 
     log.info(f"{attestation_exchange_common_secret.hex()=}")
