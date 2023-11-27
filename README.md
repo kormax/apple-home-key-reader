@@ -22,7 +22,7 @@ In any case, feel free to try it out :).
 Running this project requires the following:
 * Operating system - Linux, macOS;
 * Valid installation of Python 3.11 (earlier could work, untested);
-* A PN532 module connected to a PC or SBC.
+* A PN532 module connected to a PC or SBC (**via UART**, not I2C, not SPI).
 * Ethernet or Wi-Fi for HAP to be able to be discovered.
 
 If using a PC, PN532 has to be connected to an UART adapter that is connected to PC in a following fashion:
@@ -131,6 +131,7 @@ Therefore, there are a lot of opportunities for improvement:
   * `remove_device_credential`;
   * `get_nfc_access_control_point` - no idea what it should do;
   * Test and verify validity of other methods;
+* Optimize cryptography to enable slower devices to be used;
 * Re-write NFC stack to improve device support.
 
 In any case, feel free to create an issue to discuss potential improvements before starting any work (apart from fixing typos).

@@ -59,6 +59,9 @@ class Service:
         self._stop_flag = False
         self._runner = None
 
+    def on_endpoint_authenticated(self, endpoint):
+        """This method will be called when an endpoint is authenticated"""
+
     def start(self):
         self._runner = threading.Thread(name="homekey", target=self.run)
         self._runner.start()
@@ -119,6 +122,9 @@ class Service:
                 self.repository.upsert_issuers(new_issuers_state)
 
             log.info(f"Authenticated endpoint via {result_flow!r}: {endpoint}")
+
+            if endpoint is not None:
+                self.on_endpoint_authenticated(endpoint)
 
             end = time.monotonic()
             log.info(f"Transaction took {(end - start) * 1000} ms")

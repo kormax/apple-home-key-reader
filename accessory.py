@@ -15,9 +15,19 @@ class Lock(Accessory):
     def __init__(self, *args, service: Service, **kwargs):
         super().__init__(*args, **kwargs)
         self._last_client_public_keys = None
+
+        self._lock_target_state = 0
+        self._lock_current_state = 0
+
         self.service = service
+        self.service.on_endpoint_authenticated = lambda endpoint: self.on_endpoint_authenticated(endpoint)
         self.add_lock_service()
         self.add_nfc_access_service()
+
+    def on_endpoint_authenticated(self, endpoint):
+        self._lock_target_state = self._lock_current_state = not self._lock_current_state
+        self.lock_target_state.set_value(self._lock_target_state, should_notify=True)
+        self.lock_current_state.set_value(self._lock_current_state, should_notify=True)
 
     def add_preload_service(self, service, chars=None, unique_id=None):
         """Create a service with the given name and add it to this acc."""
@@ -52,12 +62,14 @@ class Lock(Accessory):
         self.lock_current_state = self.service_lock_mechanism.configure_char(
             "LockCurrentState",
             getter_callback=self.get_lock_current_state,
+            value=0
         )
 
-        self.lock_current_state = self.service_lock_mechanism.configure_char(
+        self.lock_target_state = self.service_lock_mechanism.configure_char(
             "LockTargetState",
             getter_callback=self.get_lock_target_state,
             setter_callback=self.set_lock_target_state,
+            value=0
         )
 
         self.service_lock_management = self.add_preload_service("LockManagement")
@@ -99,21 +111,24 @@ class Lock(Accessory):
 
     def get_lock_current_state(self):
         log.info("get_lock_current_state")
-        return 1
+        return self._lock_current_state
 
     def get_lock_target_state(self):
         log.info("get_lock_target_state")
-        return 1
+        return self._lock_target_state
 
     def set_lock_target_state(self, value):
-        log.info("set_lock_target_state {value}")
+        log.info(f"set_lock_target_state {value}")
+        self._lock_target_state = self._lock_current_state = value
+        self.lock_current_state.set_value(self._lock_current_state, should_notify=True)
+        return self._lock_target_state
 
     def get_lock_version(self):
         log.info("get_lock_version")
         return ""
 
     def set_lock_control_point(self, value):
-        log.info("set_lock_control_point: {value}")
+        log.info(f"set_lock_control_point: {value}")
 
     # All methods down here are forwarded to Service
     def get_hardware_finish(self):
