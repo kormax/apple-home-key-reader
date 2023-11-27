@@ -175,21 +175,28 @@ def fast_auth(
         raise ProtocolError(f"AUTH0 INVALID STATUS {response.sw}")
     log.info(f"AUTH0 RES = {response}")
     tlv_array = TLV.unpack_array(response.data)
+
+    endpoint_ephemeral_public_key_tag = get_tlv_tag(tlv_array, 0x86)
+    if endpoint_ephemeral_public_key_tag is None:
+        raise ProtocolError(
+            "Response does not contain endpoint_ephemeral_public_key_tag 0x86"
+        )
+
     endpoint_ephemeral_public_key = load_ec_public_key_from_bytes(
-        get_tlv_tag(tlv_array, 0x86)
+        endpoint_ephemeral_public_key_tag
     )
     endpoint_ephemeral_public_key_x, _ = get_ec_key_public_points(
         endpoint_ephemeral_public_key
     )
 
-    try:
-        returned_cryptogram = get_tlv_tag(tlv_array, 0x9D)
-    except (StopIteration,):
+    returned_cryptogram = get_tlv_tag(tlv_array, 0x9D)
+    if returned_cryptogram is None:
         return endpoint_ephemeral_public_key, None, None
 
     endpoint = None
     # FAST gives us no way to find out the identity of endpoint from the data for security reasons,
     # so we have to iterate over all provisioned endpoints and hope that it's there
+    log.info("Searching for an endpoint with matching cryptogram...")
     for endpoint in get_endpoints_from_issuers(issuers):
         k_persistent = endpoint.persistent_key
         endpoint_public_key_bytes = endpoint.public_key
@@ -327,14 +334,20 @@ def standard_auth(
     log.info(f"AUTH1 DECRYPTED RESPONSE: {response}")
 
     tlv_array = TLV.unpack_array(response.data)
+
     signature = get_tlv_tag(tlv_array, 0x9E)
+    if signature is None:
+        raise ProtocolError("No device signature in response at tag 0x9E")
+
     device_identifier = get_tlv_tag(tlv_array, 0x4E)
+    if device_identifier is None:
+        raise ProtocolError("No device identifier in response at tag 0x4E")
 
     log.info(f"{device_identifier.hex()=}")
 
     endpoint = find_endpoint_by_id_in_issuers(issuers, device_identifier)
     if endpoint is None:
-        log.info("Could not find matching endpoint")
+        log.warning("Could not find matching endpoint")
         return k_persistent, None, secure
 
     endpoint_public_key: ec.EllipticCurvePublicKey = load_ec_public_key_from_bytes(
@@ -361,7 +374,8 @@ def standard_auth(
             signature, verification_hash_input, ec.ECDSA(hashes.SHA256())
         )
     except InvalidSignature as e:
-        log.info(f"Signature data does not match {e}")
+        log.warning(f"Signature data does not match {e}")
+        return k_persistent, None, secure
     return k_persistent, endpoint, secure
 
 
@@ -506,7 +520,7 @@ def mailbox_exchange(
     response = secure.transceive(command)
     log.info(f"EXCHANGE RESPONSE {response}")
     if response.sw1 != 0x90:
-        raise ProtocolError(f"Mailbox exchange failed")
+        raise ProtocolError("Mailbox exchange failed")
     return response.data
 
 
@@ -546,7 +560,8 @@ def perform_authentication_flow(
     key_size=16,
 ) -> Tuple[DigitalKeyFlow, Optional[Issuer], Optional[Endpoint]]:
     """Returns an Endpoint if one was found and successfully authenticated.
-    Returns an Issuer if endpoint was authenticated via Attestation"""
+    Returns an Issuer if endpoint was authenticated via Attestation
+    """
     reader_public_key = reader_private_key.public_key()
     reader_public_key_x, reader_public_key_y = get_ec_key_public_points(
         reader_public_key
@@ -681,7 +696,6 @@ def read_homekey(
     Returns a list representing new configured issuer state
     and an optional endpoint in case authentication has been successful
     """
-
     transaction_flags = {
         DigitalKeyTransactionFlags.FAST
         if flow <= DigitalKeyFlow.FAST
@@ -692,7 +706,14 @@ def read_homekey(
     response = select_applet(tag, applet=ISO7816Application.HOME_KEY)
     tlv_array = TLV.unpack_array(response)
     log.info(f"{reader_identifier.hex()=}")
-    device_protocol_versions = [ver for ver in chunked(get_tlv_tag(tlv_array, 0x5C), 2)]
+
+    versions_tag = get_tlv_tag(tlv_array, 0x5C)
+    if versions_tag is None:
+        raise ProtocolError(
+            "Response does not contain supported version list at tag 0x5C"
+        )
+
+    device_protocol_versions = [ver for ver in chunked(versions_tag, 2)]
     preferred_versions = preferred_versions or []
     for preferred_version in preferred_versions:
         if preferred_version in device_protocol_versions:

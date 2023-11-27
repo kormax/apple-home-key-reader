@@ -1,5 +1,8 @@
 def get_tlv_tag(tlv_array, tag_value):
-    return next(tlv_ for tlv_ in tlv_array if tlv_.tag.data[0] == tag_value).value
+    try:
+        return next(tlv_ for tlv_ in tlv_array if tlv_.tag.data[0] == tag_value).value
+    except StopIteration:
+        return None
 
 
 def chunked(source, size):

@@ -123,11 +123,11 @@ class Service:
 
             log.info(f"Authenticated endpoint via {result_flow!r}: {endpoint}")
 
-            if endpoint is not None:
-                self.on_endpoint_authenticated(endpoint)
-
             end = time.monotonic()
             log.info(f"Transaction took {(end - start) * 1000} ms")
+
+            if endpoint is not None:
+                self.on_endpoint_authenticated(endpoint)
 
             # Let device cool down, wait for ISODEP to drop to consider comms finished
             while target.is_present:

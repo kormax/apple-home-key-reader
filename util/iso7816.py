@@ -136,7 +136,7 @@ class ISO7816StatusGroup(IntEnum):
     ERROR_UNKNOWN = 0x6F
 
 
-class ISO7816Response(Unpackable):
+class ISO7816Response(Unpackable, Packable):
     sw1: Union[int, ISO7816StatusGroup]
     sw2: int
     data: bytearray

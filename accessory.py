@@ -20,13 +20,17 @@ class Lock(Accessory):
         self._lock_current_state = 0
 
         self.service = service
-        self.service.on_endpoint_authenticated = lambda endpoint: self.on_endpoint_authenticated(endpoint)
+        self.service.on_endpoint_authenticated = self.on_endpoint_authenticated
         self.add_lock_service()
         self.add_nfc_access_service()
 
     def on_endpoint_authenticated(self, endpoint):
-        self._lock_target_state = self._lock_current_state = not self._lock_current_state
+        self._lock_target_state = 0 if self._lock_current_state else 1
+        log.info(
+            f"Toggling lock state due to endpoint authentication event {self._lock_target_state} -> {self._lock_current_state} {endpoint}"
+        )
         self.lock_target_state.set_value(self._lock_target_state, should_notify=True)
+        self._lock_current_state = self._lock_target_state
         self.lock_current_state.set_value(self._lock_current_state, should_notify=True)
 
     def add_preload_service(self, service, chars=None, unique_id=None):
@@ -60,16 +64,14 @@ class Lock(Accessory):
         self.service_lock_mechanism = self.add_preload_service("LockMechanism")
 
         self.lock_current_state = self.service_lock_mechanism.configure_char(
-            "LockCurrentState",
-            getter_callback=self.get_lock_current_state,
-            value=0
+            "LockCurrentState", getter_callback=self.get_lock_current_state, value=0
         )
 
         self.lock_target_state = self.service_lock_mechanism.configure_char(
             "LockTargetState",
             getter_callback=self.get_lock_target_state,
             setter_callback=self.set_lock_target_state,
-            value=0
+            value=0,
         )
 
         self.service_lock_management = self.add_preload_service("LockManagement")

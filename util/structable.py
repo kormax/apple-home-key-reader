@@ -3,7 +3,7 @@ import base64
 from collections.abc import Iterable
 from enum import Enum
 from string import printable
-from typing import Collection, ForwardRef, Iterator, TypeVar, Union, Tuple
+from typing import Collection, ForwardRef, TypeVar, Union
 
 PRINATBLE_BYTES = set(bytes(printable, "ascii"))
 
