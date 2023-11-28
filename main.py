@@ -49,6 +49,7 @@ def configure_homekey_service(config: dict, nfc_device, repository=None):
     service = Service(
         nfc_device,
         repository=repository or Repository(config["persist"]),
+        express=config.get("express", True),
         finish=config.get("finish"),
         flow=config.get("flow"),
     )

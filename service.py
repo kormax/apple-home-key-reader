@@ -35,11 +35,13 @@ class Service:
         self,
         clf: BroadcastFrameContactlessFrontend,
         repository: Repository,
+        express: bool = True,
         finish: str = "silver",
         flow: str = "fast",
     ) -> None:
         self.repository = repository
         self.clf = clf
+        self.express = express in (True, "True", "true", "1")
 
         try:
             self.hardware_finish_color = HardwareFinishColor[finish.upper()]
@@ -93,7 +95,8 @@ class Service:
         remote_target = self.clf.sense(
             RemoteTarget("106A"),
             broadcast=ECP.home(
-                identifier=self.repository.get_reader_group_identifier()
+                identifier=self.repository.get_reader_group_identifier(),
+                flag_2=self.express,
             ).pack(),
         )
         if remote_target is None:

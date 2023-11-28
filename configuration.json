@@ -16,6 +16,7 @@
 
     "homekey": {
         "persist": "homekey.json",
+        "express": true,
         "finish": "silver",
         "flow": "fast"
     }

@@ -81,6 +81,7 @@ Configuration is done via a JSON file `configuration.json`, with the following 4
     * `persist`: file to store HAP-python pairing data in.
 * `homekey`:
     * `persist`: file to save endpoint and issuer configuration data in;
+    * `express`: configures if to trigger express mode on devices that have it enabled. If set to `false`, bringing a device to the reader will display the key on the screen while asking for biometric authentication. Beware that this doesn't increase security as express mode is disabled on ECP level, so a would-be attacker could always 'excite' the device with express ECP frame and bring it to the reader;
     * `finish`: color of the home key art to display on your device. 
        Usually, finish of the first NFC lock added to your home defines which color the keys are going to be, even if more locks are added;  
        Possible values: `black` `tan` `gold` `silver`;
