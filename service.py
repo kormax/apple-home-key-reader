@@ -4,6 +4,7 @@ import threading
 import time
 import os
 
+from binascii import hexlify
 from entity import (
     Operation,
     ReaderKeyResponse,
@@ -12,6 +13,7 @@ from entity import (
     HardwareFinishColor,
     DeviceCredentialRequest,
     DeviceCredentialResponse,
+    Endpoint,
     Enrollments,
     Enrollment,
     OperationStatus,
@@ -26,6 +28,7 @@ from util.digital_key import DigitalKeyFlow, DigitalKeyTransactionType
 from util.ecp import ECP
 from util.iso7816 import ISO7816Tag
 from util.structable import pack_into_base64_string, unpack_from_base64_string
+from nfc.tag.tt2 import Type2TagCommandError
 
 log = logging.getLogger()
 
@@ -63,6 +66,7 @@ class Service:
 
     def on_endpoint_authenticated(self, endpoint):
         """This method will be called when an endpoint is authenticated"""
+        # Currently overwritten by accessory.py
 
     def start(self):
         self._runner = threading.Thread(name="homekey", target=self.run)
@@ -90,47 +94,66 @@ class Service:
             log.info(f"Adding issuer {issuer} based on paired clients")
             self.repository.upsert_issuer(issuer)
 
+    def _reconnect_reader(self):
+        try:
+            self.clf.open(self.clf.path)
+        except TimeoutError:
+            log.error("Failed to connect to reader. Starting new attempt in 5s...")
+            time.sleep(5)
+            self._reconnect_reader()
+
     def _process_nfc(self):
         start = time.monotonic()
-        remote_target = self.clf.sense(
-            RemoteTarget("106A"),
-            broadcast=ECP.home(
-                identifier=self.repository.get_reader_group_identifier(),
-                flag_2=self.express,
-            ).pack(),
-        )
-        if remote_target is None:
-            return
+        try:
+            remote_target = self.clf.sense(
+                RemoteTarget("106A"),
+                broadcast=ECP.home(
+                    identifier=self.repository.get_reader_group_identifier(),
+                    flag_2=self.express,
+                ).pack(),
+            )
+            if remote_target is None:
+                return
 
-        target = activate(self.clf, remote_target)
-        if target is None:
+            target = activate(self.clf, remote_target)
+            if target is None:
+                return
+        except TimeoutError:
+            log.error("Reader disconnected. Trying to reconnect...")
+            time.sleep(1)
+            self._reconnect_reader()
             return
-
+        
         try:
             log.info(f"Got NFC tag {target}")
             tag = ISO7816Tag(target)
-            result_flow, new_issuers_state, endpoint = read_homekey(
-                tag,
-                issuers=self.repository.get_all_issuers(),
-                preferred_versions=[b"\x02\x00"],
-                flow=self.flow,
-                transaction_code=DigitalKeyTransactionType.UNLOCK,
-                reader_identifier=self.repository.get_reader_group_identifier()
-                + self.repository.get_reader_identifier(),
-                reader_private_key=self.repository.get_reader_private_key(),
-                key_size=16,
-            )
+            try:
+                result_flow, new_issuers_state, endpoint = read_homekey(
+                    tag,
+                    issuers=self.repository.get_all_issuers(),
+                    preferred_versions=[b"\x02\x00"],
+                    flow=self.flow,
+                    transaction_code=DigitalKeyTransactionType.UNLOCK,
+                    reader_identifier=self.repository.get_reader_group_identifier()
+                    + self.repository.get_reader_identifier(),
+                    reader_private_key=self.repository.get_reader_private_key(),
+                    key_size=16,
+                )
 
-            if new_issuers_state is not None and len(new_issuers_state):
-                self.repository.upsert_issuers(new_issuers_state)
+                if new_issuers_state is not None and len(new_issuers_state):
+                    self.repository.upsert_issuers(new_issuers_state)
 
-            log.info(f"Authenticated endpoint via {result_flow!r}: {endpoint}")
+                log.info(f"Authenticated endpoint via {result_flow!r}: {endpoint}")
 
-            end = time.monotonic()
-            log.info(f"Transaction took {(end - start) * 1000} ms")
+                end = time.monotonic()
+                log.info(f"Transaction took {(end - start) * 1000} ms")
 
-            if endpoint is not None:
-                self.on_endpoint_authenticated(endpoint)
+                if endpoint is not None:
+                    self.on_endpoint_authenticated(endpoint)
+
+            except Type2TagCommandError:
+                # Couldn't authenticate with HomeKey, other type2-tag was presented
+                log.info("Found non-HomeKey Type2-Tag with UID: {}".format(hexlify(target.identifier).decode().upper()))
 
             # Let device cool down, wait for ISODEP to drop to consider comms finished
             while target.is_present:
