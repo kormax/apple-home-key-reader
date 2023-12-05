@@ -47,8 +47,9 @@ log = logging.getLogger(__name__)
 class BroadcastFrameContactlessFrontend(ContactlessFrontend):
     # Modified code BEGIN
     def __init__(self, path=None, *, broadcast_enabled=False):
+        self.path = path
         self.broadcast_enabled = broadcast_enabled
-        super().__init__(path)
+        super().__init__(self.path)
 
     # Modified code END
 
