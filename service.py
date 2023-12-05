@@ -1,10 +1,14 @@
 import base64
+import functools
 import logging
 import threading
 import time
 import os
+from operator import attrgetter
+from typing import Optional
 
 from entity import (
+    Issuer,
     Operation,
     ReaderKeyResponse,
     ReaderKeyRequest,
@@ -12,6 +16,7 @@ from entity import (
     HardwareFinishColor,
     DeviceCredentialRequest,
     DeviceCredentialResponse,
+    Endpoint,
     Enrollments,
     Enrollment,
     OperationStatus,
@@ -19,12 +24,18 @@ from entity import (
     ControlPointRequest,
     ControlPointResponse,
 )
-from homekey import Endpoint, Issuer, read_homekey
+from homekey import read_homekey, ProtocolError
 from repository import Repository
-from util.bfclf import BroadcastFrameContactlessFrontend, RemoteTarget, activate
+from util.bfclf import (
+    BroadcastFrameContactlessFrontend,
+    RemoteTarget,
+    activate,
+    ISODEPTag,
+)
 from util.digital_key import DigitalKeyFlow, DigitalKeyTransactionType
 from util.ecp import ECP
 from util.iso7816 import ISO7816Tag
+from util.threads import create_runner
 from util.structable import pack_into_base64_string, unpack_from_base64_string
 
 log = logging.getLogger()
@@ -58,18 +69,25 @@ class Service:
                 f"Digital Key flow {flow} is not supported. Falling back to {self.flow}"
             )
 
-        self._stop_flag = False
+        self._run_flag = True
         self._runner = None
 
     def on_endpoint_authenticated(self, endpoint):
         """This method will be called when an endpoint is authenticated"""
+        # Currently overwritten by accessory.py
 
     def start(self):
-        self._runner = threading.Thread(name="homekey", target=self.run)
-        self._runner.start()
+        self._runner = create_runner(
+            name="homekey",
+            target=self.run,
+            flag=attrgetter("_run_flag"),
+            delay=0,
+            exception_delay=5,
+            start=True,
+        )
 
     def stop(self):
-        self._stop_flag = True
+        self._run_flag = False
         if self._runner is not None:
             self._runner.join()
 
@@ -90,8 +108,9 @@ class Service:
             log.info(f"Adding issuer {issuer} based on paired clients")
             self.repository.upsert_issuer(issuer)
 
-    def _process_nfc(self):
+    def _read_homekey(self):
         start = time.monotonic()
+
         remote_target = self.clf.sense(
             RemoteTarget("106A"),
             broadcast=ECP.home(
@@ -106,9 +125,19 @@ class Service:
         if target is None:
             return
 
+        if not isinstance(target, ISODEPTag):
+            log.info(
+                f"Found non-ISODEP Tag with UID: {target.identifier.hex().upper()}"
+            )
+            while self.clf.sense(RemoteTarget("106A")) is not None:
+                log.info("Waiting for target to leave the field...")
+                time.sleep(0.5)
+            return
+
+        log.info(f"Got NFC tag {target}")
+
+        tag = ISO7816Tag(target)
         try:
-            log.info(f"Got NFC tag {target}")
-            tag = ISO7816Tag(target)
             result_flow, new_issuers_state, endpoint = read_homekey(
                 tag,
                 issuers=self.repository.get_all_issuers(),
@@ -131,31 +160,32 @@ class Service:
 
             if endpoint is not None:
                 self.on_endpoint_authenticated(endpoint)
+        except ProtocolError as e:
+            log.info(f'Could not authenticate device due to protocol error "{e}"')
 
-            # Let device cool down, wait for ISODEP to drop to consider comms finished
-            while target.is_present:
-                log.info("Waiting for device to leave the field...")
-                time.sleep(0.5)
-            log.info("Device left the field. Continuing in 2 seconds...")
-            time.sleep(2)
-        except Exception as e:
-            log.exception(e)
-            log.warning(
-                "Encountered an exception. Waiting for 5 seconds before continuing..."
-            )
-            time.sleep(5)
+        # Let device cool down, wait for ISODEP to drop to consider comms finished
+        while target.is_present:
+            log.info("Waiting for device to leave the field...")
+            time.sleep(0.5)
+        log.info("Device left the field. Continuing in 2 seconds...")
+        time.sleep(2)
         log.info("Waiting for next device...")
 
     def run(self):
-        while True:
-            if self._stop_flag:
-                return
-            try:
-                self._process_nfc()
-            except Exception as e:
-                log.exception(e)
-            finally:
-                time.sleep(0)
+        if self.repository.get_reader_private_key() in (None, b""):
+            raise Exception("Device is not configured via HAP. NFC inactive")
+
+        log.exception(f"Connecting to the NFC reader...")
+
+        self.clf.device = None
+        self.clf.open(self.clf.path)
+        if self.clf.device is None:
+            raise Exception(
+                f"Could not connect to NFC device {self.clf} at {self.clf.path}"
+            )
+
+        while self._run_flag:
+            self._read_homekey()
 
     def get_reader_key(self, request: ReaderKeyRequest) -> ReaderKeyResponse:
         response = ReaderKeyResponse(

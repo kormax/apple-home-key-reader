@@ -38,17 +38,28 @@ from nfc.clf import (
     UnsupportedTargetError,
 )
 from nfc.tag import activate
+from nfc.tag.tt4 import Type4Tag
+
 
 from util.nfc import with_crc16a
 
+
 log = logging.getLogger(__name__)
+
+
+# Redeclaring just for cleaner imports elsewhere
+ISODEPTag = Type4Tag
+RemoteTarget = RemoteTarget
+activate = activate
 
 
 class BroadcastFrameContactlessFrontend(ContactlessFrontend):
     # Modified code BEGIN
     def __init__(self, path=None, *, broadcast_enabled=False):
+        self.path = path
         self.broadcast_enabled = broadcast_enabled
-        super().__init__(path)
+        # We send None so that we can try activating the reader later in a loop instead of throwing an exception right away
+        super().__init__(None)
 
     # Modified code END
 
@@ -179,4 +190,4 @@ class BroadcastFrameContactlessFrontend(ContactlessFrontend):
                     time.sleep(max(0, options.get("interval", 0.1) - elapsed))
 
 
-__all__ = ("BroadcastFrameContactlessFrontend", "RemoteTarget", "activate")
+__all__ = ("BroadcastFrameContactlessFrontend", "RemoteTarget", "ISODEPTag", "activate")
