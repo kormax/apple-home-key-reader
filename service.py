@@ -1,11 +1,14 @@
 import base64
+import functools
 import logging
 import threading
 import time
 import os
+from operator import attrgetter
+from typing import Optional
 
-from binascii import hexlify
 from entity import (
+    Issuer,
     Operation,
     ReaderKeyResponse,
     ReaderKeyRequest,
@@ -21,14 +24,19 @@ from entity import (
     ControlPointRequest,
     ControlPointResponse,
 )
-from homekey import Endpoint, Issuer, read_homekey
+from homekey import read_homekey, ProtocolError
 from repository import Repository
-from util.bfclf import BroadcastFrameContactlessFrontend, RemoteTarget, activate
+from util.bfclf import (
+    BroadcastFrameContactlessFrontend,
+    RemoteTarget,
+    activate,
+    ISODEPTag,
+)
 from util.digital_key import DigitalKeyFlow, DigitalKeyTransactionType
 from util.ecp import ECP
 from util.iso7816 import ISO7816Tag
+from util.threads import create_runner
 from util.structable import pack_into_base64_string, unpack_from_base64_string
-from nfc.tag.tt2 import Type2TagCommandError
 
 log = logging.getLogger()
 
@@ -61,7 +69,7 @@ class Service:
                 f"Digital Key flow {flow} is not supported. Falling back to {self.flow}"
             )
 
-        self._stop_flag = False
+        self._run_flag = True
         self._runner = None
 
     def on_endpoint_authenticated(self, endpoint):
@@ -69,11 +77,17 @@ class Service:
         # Currently overwritten by accessory.py
 
     def start(self):
-        self._runner = threading.Thread(name="homekey", target=self.run)
-        self._runner.start()
+        self._runner = create_runner(
+            name="homekey",
+            target=self.run,
+            flag=attrgetter("_run_flag"),
+            delay=0,
+            exception_delay=5,
+            start=True,
+        )
 
     def stop(self):
-        self._stop_flag = True
+        self._run_flag = False
         if self._runner is not None:
             self._runner.join()
 
@@ -94,91 +108,84 @@ class Service:
             log.info(f"Adding issuer {issuer} based on paired clients")
             self.repository.upsert_issuer(issuer)
 
-    def _reconnect_reader(self):
-        try:
-            self.clf.open(self.clf.path)
-        except TimeoutError:
-            log.error("Failed to connect to reader. Starting new attempt in 5s...")
-            time.sleep(5)
-            self._reconnect_reader()
-
-    def _process_nfc(self):
+    def _read_homekey(self):
         start = time.monotonic()
-        try:
-            remote_target = self.clf.sense(
-                RemoteTarget("106A"),
-                broadcast=ECP.home(
-                    identifier=self.repository.get_reader_group_identifier(),
-                    flag_2=self.express,
-                ).pack(),
-            )
-            if remote_target is None:
-                return
 
-            target = activate(self.clf, remote_target)
-            if target is None:
-                return
-        except TimeoutError:
-            log.error("Reader disconnected. Trying to reconnect...")
-            time.sleep(1)
-            self._reconnect_reader()
+        remote_target = self.clf.sense(
+            RemoteTarget("106A"),
+            broadcast=ECP.home(
+                identifier=self.repository.get_reader_group_identifier(),
+                flag_2=self.express,
+            ).pack(),
+        )
+        if remote_target is None:
             return
-        
-        try:
-            log.info(f"Got NFC tag {target}")
-            tag = ISO7816Tag(target)
-            try:
-                result_flow, new_issuers_state, endpoint = read_homekey(
-                    tag,
-                    issuers=self.repository.get_all_issuers(),
-                    preferred_versions=[b"\x02\x00"],
-                    flow=self.flow,
-                    transaction_code=DigitalKeyTransactionType.UNLOCK,
-                    reader_identifier=self.repository.get_reader_group_identifier()
-                    + self.repository.get_reader_identifier(),
-                    reader_private_key=self.repository.get_reader_private_key(),
-                    key_size=16,
-                )
 
-                if new_issuers_state is not None and len(new_issuers_state):
-                    self.repository.upsert_issuers(new_issuers_state)
+        target = activate(self.clf, remote_target)
+        if target is None:
+            return
 
-                log.info(f"Authenticated endpoint via {result_flow!r}: {endpoint}")
-
-                end = time.monotonic()
-                log.info(f"Transaction took {(end - start) * 1000} ms")
-
-                if endpoint is not None:
-                    self.on_endpoint_authenticated(endpoint)
-
-            except Type2TagCommandError:
-                # Couldn't authenticate with HomeKey, other type2-tag was presented
-                log.info("Found non-HomeKey Type2-Tag with UID: {}".format(hexlify(target.identifier).decode().upper()))
-
-            # Let device cool down, wait for ISODEP to drop to consider comms finished
-            while target.is_present:
-                log.info("Waiting for device to leave the field...")
-                time.sleep(0.5)
-            log.info("Device left the field. Continuing in 2 seconds...")
-            time.sleep(2)
-        except Exception as e:
-            log.exception(e)
-            log.warning(
-                "Encountered an exception. Waiting for 5 seconds before continuing..."
+        if not isinstance(target, ISODEPTag):
+            log.info(
+                f"Found non-ISODEP Tag with UID: {target.identifier.hex().upper()}"
             )
-            time.sleep(5)
+            while self.clf.sense(RemoteTarget("106A")) is not None:
+                log.info("Waiting for target to leave the field...")
+                time.sleep(0.5)
+            return
+
+        log.info(f"Got NFC tag {target}")
+
+        tag = ISO7816Tag(target)
+        try:
+            result_flow, new_issuers_state, endpoint = read_homekey(
+                tag,
+                issuers=self.repository.get_all_issuers(),
+                preferred_versions=[b"\x02\x00"],
+                flow=self.flow,
+                transaction_code=DigitalKeyTransactionType.UNLOCK,
+                reader_identifier=self.repository.get_reader_group_identifier()
+                + self.repository.get_reader_identifier(),
+                reader_private_key=self.repository.get_reader_private_key(),
+                key_size=16,
+            )
+
+            if new_issuers_state is not None and len(new_issuers_state):
+                self.repository.upsert_issuers(new_issuers_state)
+
+            log.info(f"Authenticated endpoint via {result_flow!r}: {endpoint}")
+
+            end = time.monotonic()
+            log.info(f"Transaction took {(end - start) * 1000} ms")
+
+            if endpoint is not None:
+                self.on_endpoint_authenticated(endpoint)
+        except ProtocolError as e:
+            log.info(f'Could not authenticate device due to protocol error "{e}"')
+
+        # Let device cool down, wait for ISODEP to drop to consider comms finished
+        while target.is_present:
+            log.info("Waiting for device to leave the field...")
+            time.sleep(0.5)
+        log.info("Device left the field. Continuing in 2 seconds...")
+        time.sleep(2)
         log.info("Waiting for next device...")
 
     def run(self):
-        while True:
-            if self._stop_flag:
-                return
-            try:
-                self._process_nfc()
-            except Exception as e:
-                log.exception(e)
-            finally:
-                time.sleep(0)
+        if self.repository.get_reader_private_key() in (None, b""):
+            raise Exception("Device is not configured via HAP. NFC inactive")
+
+        log.exception(f"Connecting to the NFC reader...")
+
+        self.clf.device = None
+        self.clf.open(self.clf.path)
+        if self.clf.device is None:
+            raise Exception(
+                f"Could not connect to NFC device {self.clf} at {self.clf.path}"
+            )
+
+        while self._run_flag:
+            self._read_homekey()
 
     def get_reader_key(self, request: ReaderKeyRequest) -> ReaderKeyResponse:
         response = ReaderKeyResponse(

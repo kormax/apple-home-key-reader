@@ -38,8 +38,10 @@ class Repository:
                     Issuer.from_dict(issuer)
                     for _, issuer in configuration.get("issuers", {}).items()
                 ]
-        except Exception as e:
-            log.exception(e)
+        except Exception:
+            log.exception(
+                f"Could not load Home Key configuration. Assuming that device is not yet configured..."
+            )
             pass
 
     def _save_state_to_file(self):
