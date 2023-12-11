@@ -9,6 +9,7 @@ def runner(
 ):
 
     self = target.__self__
+
     @functools.wraps(target)
     def function_(*args, **kwargs):
         while flag(self):

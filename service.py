@@ -1,11 +1,8 @@
 import base64
-import functools
 import logging
-import threading
 import time
 import os
 from operator import attrgetter
-from typing import Optional
 
 from entity import (
     Issuer,
@@ -175,7 +172,7 @@ class Service:
         if self.repository.get_reader_private_key() in (None, b""):
             raise Exception("Device is not configured via HAP. NFC inactive")
 
-        log.exception(f"Connecting to the NFC reader...")
+        log.exception("Connecting to the NFC reader...")
 
         self.clf.device = None
         self.clf.open(self.clf.path)
