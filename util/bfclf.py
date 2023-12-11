@@ -24,7 +24,9 @@
 # Parts of the code that were changed are denoted by "Modified code BEGIN" and "Modified code END" comments
 
 
+import ast
 import errno
+import inspect
 import logging
 import os
 import time
@@ -40,17 +42,41 @@ from nfc.clf import (
 from nfc.tag import activate
 from nfc.tag.tt4 import Type4Tag
 
-
+# Modified code BEGIN
 from util.nfc import with_crc16a
+
+
+# Monkey patch pn532 init function to disable baudrate renegotiation
+def patch_pn532_init_function():
+    """This function modifies code of pn532 init function to prevent baudrate renegotiation on Linux systems"""
+    import nfc.clf.pn532 as pn532_module
+
+    class ModifyBaudrateVisitor(ast.NodeTransformer):
+        def visit_Assign(self, node):
+            if isinstance(node.targets[0], ast.Name) and node.targets[0].id == 'change_baudrate':
+                node.value = ast.parse("False").body[0].value
+            return node
+
+    init_src = inspect.getsource(pn532_module.init)
+    init_ast = ast.parse(init_src)
+    modified_tree = ModifyBaudrateVisitor().visit(init_ast)
+    # Convert the modified AST object back to code
+    modified_code = compile(modified_tree, filename='', mode='exec')
+    exec(modified_code, vars(pn532_module))
+
+
+patch_pn532_init_function()
 
 
 log = logging.getLogger(__name__)
 
-
-# Redeclaring just for cleaner imports elsewhere
+# Re-declaring just for cleaner imports elsewhere
 ISODEPTag = Type4Tag
 RemoteTarget = RemoteTarget
 activate = activate
+
+
+# Modified code END
 
 
 class BroadcastFrameContactlessFrontend(ContactlessFrontend):
@@ -108,7 +134,7 @@ class BroadcastFrameContactlessFrontend(ContactlessFrontend):
         # Modified code BEGIN
         def sense_broadcast(target, broadcast):
             # Correct implementation would be to define and call sense_broadcast from device implementation
-            # and adding all support checks there. For simplicity, everthing has been included in one file here
+            # and adding all support checks there. For simplicity, everything has been included in one file here
             if not self.broadcast_enabled:
                 return
 
