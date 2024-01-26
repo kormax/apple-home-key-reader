@@ -11,7 +11,8 @@
 
     "hap": {
         "port": 51926,
-        "persist": "hap.state"
+        "persist": "hap.state",
+        "default": "locked"
     },
 
     "homekey": {

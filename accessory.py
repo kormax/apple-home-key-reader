@@ -12,12 +12,12 @@ log = logging.getLogger()
 class Lock(Accessory):
     category = CATEGORY_DOOR_LOCK
 
-    def __init__(self, *args, service: Service, **kwargs):
+    def __init__(self, *args, service: Service, lock_state_at_startup=1, **kwargs):
         super().__init__(*args, **kwargs)
         self._last_client_public_keys = None
 
-        self._lock_target_state = 0
-        self._lock_current_state = 0
+        self._lock_target_state = lock_state_at_startup
+        self._lock_current_state = lock_state_at_startup
 
         self.service = service
         self.service.on_endpoint_authenticated = self.on_endpoint_authenticated
