@@ -153,12 +153,15 @@ class BroadcastFrameContactlessFrontend(ContactlessFrontend):
 
             # Turn off detection retries at it might break broadcast frame sequence
             self.device.chipset.rf_configuration(0x05, [0xFF, 0x01, 0x00])
+            # Set a 12 ms response timeout. Normally, WUPA takes 1.6-4.4 ms, so this timeout is more than sufficient
+            self.device.chipset.rf_configuration(0x02, [0x0A, 0x0B, 0x08])
 
             if target.brty.endswith("A"):
                 self.device.chipset.write_register("CIU_BitFraming", 0x00)
                 broadcast = with_crc16a(broadcast)
             try:
-                _ = self.device.chipset.in_communicate_thru(broadcast, timeout=0.1)
+                _ = self.device.chipset.in_communicate_thru(broadcast, timeout=0.25)
+            
                 # Can proccess response here later
             except (nfc.clf.pn53x.Chipset.Error,) as e:
                 # Timeout is OK for broadcast frames as we don't always expect an answer
