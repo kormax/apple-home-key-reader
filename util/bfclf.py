@@ -161,7 +161,7 @@ class BroadcastFrameContactlessFrontend(ContactlessFrontend):
                 broadcast = with_crc16a(broadcast)
             try:
                 _ = self.device.chipset.in_communicate_thru(broadcast, timeout=0.25)
-            
+
                 # Can proccess response here later
             except (nfc.clf.pn53x.Chipset.Error,) as e:
                 # Timeout is OK for broadcast frames as we don't always expect an answer

@@ -107,7 +107,7 @@ class DigitalKeySecureContext:
         calculated_mac = aes_cmac(self.kmac, self.mac_chaining_value + ciphertext)
         assert (
             mac == calculated_mac[:8]
-        ), f"MAC Does  {mac.hex()=} {calculated_mac[:8].hex()=}"
+        ), f"MAC Does mac={mac.hex()} calculated_mac={calculated_mac[:8].hex()}"
         plaintext = decrypt(
             ciphertext=ciphertext, pcb=COMMAND_PCB, kenc=self.kenc, counter=self.counter
         )
@@ -130,7 +130,7 @@ class DigitalKeySecureContext:
         calculated_rmac = aes_cmac(self.krmac, self.mac_chaining_value + ciphertext)
         assert (
             rmac == calculated_rmac[:8]
-        ), f"RMAC Does  {rmac.hex()=} {calculated_rmac[:8].hex()=}"
+        ), f"RMAC Does rmac={rmac.hex()} calculated_rmac={calculated_rmac[:8].hex()}"
         plaintext = decrypt(
             ciphertext=ciphertext,
             pcb=RESPONSE_PCB,

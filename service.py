@@ -224,7 +224,7 @@ class Service:
         endpoint = self.repository.get_endpoint_by_public_key(
             b"\x04" + request.credential_public_key
         )
-        log.info(f"*** add_device_credential {endpoint=}")
+        log.info(f"*** add_device_credential endpoint={endpoint}")
 
         if endpoint is not None:
             if endpoint.enrollments.hap is None:
@@ -240,7 +240,7 @@ class Service:
             )
 
         issuer = self.repository.get_issuer_by_id(request.issuer_key_identifier)
-        log.info(f"*** add_device_credential {issuer=}")
+        log.info(f"*** add_device_credential issuer={issuer}")
 
         if issuer is None:
             return DeviceCredentialResponse(

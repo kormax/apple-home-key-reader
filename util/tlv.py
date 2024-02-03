@@ -1,5 +1,5 @@
 from enum import Enum, IntEnum
-from typing import Collection, List, Union
+from typing import Collection, List, Union, Dict
 
 from util.generic import int_to_bytes
 from util.structable import PackableData, Packable, Unpackable, pack, represent
@@ -362,7 +362,7 @@ class TLV8ObjectMeta(type):
 
 
 class TLV8Object(Packable, Unpackable, metaclass=TLV8ObjectMeta):
-    _tlv8_fields: dict[str, TLV8Field]
+    _tlv8_fields: Dict[str, TLV8Field]
 
     def __init__(self, **kwargs):
         super().__init__()

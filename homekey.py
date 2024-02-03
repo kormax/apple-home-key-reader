@@ -99,14 +99,14 @@ def get_key_material_generator(
     shared_key = reader_ephemeral_private_key.exchange(
         ec.ECDH(), endpoint_ephemeral_public_key
     )
-    log.info(f"{shared_key.hex()=}")
+    log.info(f"shared_key={shared_key.hex()}")
 
     derived_key = X963KDF(
         algorithm=hashes.SHA256(),
         length=32,
         sharedinfo=transaction_identifier,
     ).derive(shared_key)
-    log.info(f"{derived_key.hex()=}")
+    log.info(f"derived_key={derived_key.hex()}")
 
     def generate_keying_material(context: Context, key_size: int):
         info_material = (
@@ -121,7 +121,7 @@ def get_key_material_generator(
         )
 
         info = pack(info_material)
-        log.info(f"{info.hex()=}")
+        log.info(f"info={info.hex()}")
 
         material = HKDF(
             algorithm=hashes.SHA256(),
@@ -234,11 +234,14 @@ def fast_auth(
         krmac = hkdf[key_size * 3 :]
         calculated_cryptogram = kcmac
         log.info(
-            f"Endpoint({endpoint.id.hex()}): {returned_cryptogram.hex()=} ? {calculated_cryptogram.hex()=}"
+            f"Endpoint({endpoint.id.hex()}):"
+            f" returned_cryptogram={returned_cryptogram.hex()}"
+            f" ? calculated_cryptogram={calculated_cryptogram.hex()}"
         )
         if returned_cryptogram == calculated_cryptogram:
             log.info(
-                f"Cryptograms match for Endpoint({endpoint.id.hex()}): {kcmac.hex()=} {kenc.hex()=} {kmac.hex()=} {krmac.hex()=};"
+                f"Cryptograms match for Endpoint({endpoint.id.hex()}):"
+                f" kcmac={kcmac.hex()} kenc={kenc.hex()} kmac={kmac.hex()} krmac={krmac.hex()};"
             )
             return (
                 endpoint_ephemeral_public_key,
@@ -273,7 +276,8 @@ def standard_auth(
         reader_ephemeral_public_key
     )
     log.info(
-        f"{endpoint_ephemeral_public_key_x.hex()=} {reader_ephemeral_public_key_x.hex()=}"
+        f"endpoint_ephemeral_public_key_x={endpoint_ephemeral_public_key_x.hex()}"
+        f" reader_ephemeral_public_key_x={reader_ephemeral_public_key_x.hex()}"
     )
 
     authentication_hash_input_material = [
@@ -284,15 +288,15 @@ def standard_auth(
         TLV(0x93, value=READER_CONTEXT),
     ]
     authentication_hash_input = pack(authentication_hash_input_material)
-    log.info(f"{authentication_hash_input.hex()=}")
+    log.info(f"authentication_hash_input={authentication_hash_input.hex()}")
 
     signature = reader_private_key.sign(
         authentication_hash_input, ec.ECDSA(hashes.SHA256())
     )
-    log.info(f"{signature.hex()=} ({hex(len(signature))})")
+    log.info(f"signature={signature.hex()} ({hex(len(signature))})")
     x, y = decode_dss_signature(signature)
     signature_point_form = bytes([*x.to_bytes(32, "big"), *y.to_bytes(32, "big")])
-    log.info(f"{signature_point_form.hex()=} ({hex(len(signature_point_form))})")
+    log.info(f"signature_point_form={signature_point_form.hex()} ({hex(len(signature_point_form))})")
 
     data = TLV(0x9E, value=signature_point_form)
     command = ISO7816Command(cla=0x80, ins=0x81, p1=0x00, p2=0x00, data=data)
@@ -314,14 +318,14 @@ def standard_auth(
     )
 
     k_persistent = get_key_material(context=Context.PERSISTENT, key_size=key_size * 2)
-    log.info(f"{k_persistent.hex()=}")
+    log.info(f"k_persistent={k_persistent.hex()}")
 
     hkdf = get_key_material(context=Context.VOLATILE, key_size=key_size * 3)
-    log.info(f"{hkdf.hex()=}")
+    log.info(f"hkdf={hkdf.hex()}")
     kenc = hkdf[: key_size * 1]
     kmac = hkdf[key_size * 1 : key_size * 2]
     krmac = hkdf[key_size * 2 :]
-    log.info(f"{kenc.hex()=} {kmac.hex()=} {krmac.hex()=}")
+    log.info(f"kenc={kenc.hex()} kmac={kmac.hex()} krmac={krmac.hex()}")
 
     secure = DigitalKeySecureContext(tag, kenc, kmac, krmac)
 
@@ -343,7 +347,7 @@ def standard_auth(
     if device_identifier is None:
         raise ProtocolError("No device identifier in response at tag 0x4E")
 
-    log.info(f"{device_identifier.hex()=}")
+    log.info(f"device_identifier={device_identifier.hex()}")
 
     endpoint = find_endpoint_by_id_in_issuers(issuers, device_identifier)
     if endpoint is None:
@@ -354,7 +358,7 @@ def standard_auth(
         endpoint.public_key
     )
 
-    log.info(f"{signature.hex()=}")
+    log.info(f"signature={signature.hex()}")
     signature = encode_dss_signature(
         int.from_bytes(signature[:32], "big"), int.from_bytes(signature[32:], "big")
     )
@@ -367,7 +371,7 @@ def standard_auth(
         TLV(0x93, value=DEVICE_CONTEXT),
     ]
     verification_hash_input = pack(verification_hash_input_material)
-    log.info(f"{verification_hash_input.hex()=}")
+    log.info(f"verification_hash_input={verification_hash_input.hex()}")
 
     try:
         endpoint_public_key.verify(
@@ -572,7 +576,7 @@ def perform_authentication_flow(
 
     reader_ephemeral_public_key = reader_ephemeral_private_key.public_key()
 
-    log.info(f"{protocol_version.hex()=}")
+    log.info(f"protocol_version={protocol_version.hex()}")
 
     endpoint_ephemeral_public_key, endpoint, secure = fast_auth(
         tag=tag,
@@ -612,7 +616,7 @@ def perform_authentication_flow(
     if endpoint is not None and flow <= DigitalKeyFlow.STANDARD:
         return DigitalKeyFlow.STANDARD, None, endpoint
 
-    log.info(f"{attestation_exchange_common_secret.hex()=}")
+    log.info(f"attestation_exchange_common_secret={attestation_exchange_common_secret.hex()}")
     # Notify OS about intent of exchanging attestation, provide common secret
     operation = TLV(0x8E, value=TLV(0xC0, value=attestation_exchange_common_secret))
     _ = mailbox_exchange(secure, mailbox_operations=(operation,))
@@ -620,7 +624,7 @@ def perform_authentication_flow(
     control_flow(tag, 0x40, 0xA0)
 
     attestation_package = exchange_attestation(tag, attestation_exchange_common_secret)
-    log.info(f"{attestation_package=}")
+    log.info(f"attestation_package={attestation_package}")
 
     attestation_package_cbor = cbor2.loads(attestation_package)
     issuer_signed_cbor = attestation_package_cbor["documents"][0]["issuerSigned"][
@@ -705,7 +709,7 @@ def read_homekey(
 
     response = select_applet(tag, applet=ISO7816Application.HOME_KEY)
     tlv_array = TLV.unpack_array(response)
-    log.info(f"{reader_identifier.hex()=}")
+    log.info(f"reader_identifier={reader_identifier.hex()}")
 
     versions_tag = get_tlv_tag(tlv_array, 0x5C)
     if versions_tag is None:
