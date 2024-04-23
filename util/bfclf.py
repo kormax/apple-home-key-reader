@@ -29,9 +29,13 @@ import errno
 import inspect
 import logging
 import os
+import platform
+import re
 import time
+from binascii import hexlify
 
 import nfc.clf.pn53x
+import usb
 from nfc.clf import (
     CommunicationError,
     ContactlessFrontend,
@@ -42,6 +46,7 @@ from nfc.clf import (
 from nfc.tag import activate
 from nfc.tag.tt4 import Type4Tag
 
+from util.generic import chunked
 # Modified code BEGIN
 from util.nfc import with_crc16a
 
@@ -65,8 +70,197 @@ def patch_pn532_init_function():
     exec(modified_code, vars(pn532_module))
 
 
-patch_pn532_init_function()
+def patch_usb_transport_implementation():
+    DIRECTION_MASK = 0b1_0000000
+    DIRECTION_OUT = 0b0_0000000
+    DIRECTION_IN = 0b1_0000000
 
+    TRANSFER_MASK = 0b000000_11
+    TRANSFER_BULK = 0b000000_10
+
+    def _find_endpoint(device, endpoint_rule=lambda e: True):
+        for configuration in device.configurations():
+            for interface in configuration.interfaces():
+                for endpoint in interface.endpoints():
+                    if endpoint_rule(endpoint):
+                        return configuration, interface, endpoint
+        return None, None, None
+
+    def is_unix_based():
+        return platform.system() in ("Linux", "Darwin")
+
+    class USB(object):
+        TYPE = "USB"
+
+        @classmethod
+        def find(cls, path):
+            if not path.startswith("usb"):
+                return
+
+            usb_or_none = re.compile(r'^(usb|)$')
+            usb_vid_pid = re.compile(r'^usb(:[0-9a-fA-F]{4})(:[0-9a-fA-F]{4})?$')
+            usb_bus_dev = re.compile(r'^usb(:[0-9]{1,3})(:[0-9]{1,3})?$')
+            match = None
+
+            for regex in (usb_vid_pid, usb_bus_dev, usb_or_none):
+                m = regex.match(path)
+                if m is not None:
+                    log.debug("path matches {0!r}".format(regex.pattern))
+                    if regex is usb_vid_pid:
+                        match = [int(s.strip(':'), 16) for s in m.groups() if s]
+                        match = dict(zip(['vid', 'pid'], match))
+                    if regex is usb_bus_dev:
+                        match = [int(s.strip(':'), 10) for s in m.groups() if s]
+                        match = dict(zip(['bus', 'adr'], match))
+                    if regex is usb_or_none:
+                        match = dict()
+                    break
+            else:
+                return None
+
+            params = {
+                k: v
+                for k, v in {
+                    "idVendor": match.get('vid'),
+                    "idProduct": match.get('pid'),
+                    "bus": match.get('bus'),
+                    "address": match.get('address')
+                }.items()
+                if v is not None
+            }
+
+            devices = usb.core.find(
+                **params,
+                find_all=True
+            )
+
+            return [(d.idVendor, d.idProduct, d.bus, d.address) for d in devices]
+
+        def __init__(self, usb_bus, dev_adr):
+            self.kernel_driver_detached = False
+            self.usb_dev = None
+            self.usb_inp = None
+            self.usb_out = None
+
+            self.open(usb_bus, dev_adr)
+
+        def __del__(self):
+            self.close()
+
+        def open(self, usb_bus, dev_adr):
+            self.usb_dev = None
+            self.usb_out = None
+            self.usb_inp = None
+
+            device = usb.core.find(
+                bus=usb_bus,
+                address=dev_adr,
+            )
+            if device is None:
+                log.error("no device {0} on bus {1}".format(dev_adr, usb_bus))
+                raise IOError(errno.ENODEV, os.strerror(errno.ENODEV))
+
+            r_configuration, r_interface, read_endpoint = _find_endpoint(
+                device,
+                lambda e: (e.bEndpointAddress & DIRECTION_MASK) == DIRECTION_IN
+                          and (e.bmAttributes & TRANSFER_MASK) == TRANSFER_BULK
+            )
+
+            w_configuration, w_interface, write_endpoint = _find_endpoint(
+                device,
+                lambda e: (e.bEndpointAddress & DIRECTION_MASK) == DIRECTION_OUT
+                          and (e.bmAttributes & TRANSFER_MASK) == TRANSFER_BULK
+            )
+            if None in (r_configuration, r_interface, read_endpoint, w_configuration, w_interface, write_endpoint):
+                log.error("no usb configuration settings, please replug device")
+                raise IOError(errno.ENODEV, os.strerror(errno.ENODEV))
+
+            self.usb_inp = read_endpoint
+            self.usb_out = write_endpoint
+            self.usb_dev = device
+
+            logging.debug(f"{self.usb_dev=} {self.usb_inp=} {self.usb_out=}")
+
+            if not (self.usb_inp and self.usb_out):
+                log.error("no bulk endpoints for read and write")
+                raise IOError(errno.ENODEV, os.strerror(errno.ENODEV))
+
+            try:
+                # workaround the PN533's buggy USB implementation
+                self._manufacturer_name = self.usb_dev.manufacturer
+                self._product_name = self.usb_dev.product
+            except Exception:
+                self._manufacturer_name = None
+                self._product_name = None
+
+            if is_unix_based() and self.usb_dev.is_kernel_driver_active(0):
+                self.usb_dev.detach_kernel_driver(0)
+                self.kernel_driver_detached = True
+            usb.util.claim_interface(self.usb_dev, 0)
+
+        def close(self):
+            usb.util.release_interface(self.usb_dev, 0)
+            if self.kernel_driver_detached:
+                self.usb_dev.attach_kernel_driver(0)
+            self.usb_dev = None
+            self.usb_inp = None
+            self.usb_out = None
+
+        @property
+        def manufacturer_name(self):
+            return self._manufacturer_name
+
+        @property
+        def product_name(self):
+            return self._product_name
+
+        def read(self, timeout=0):
+            if self.usb_inp is None:
+                return
+
+            try:
+                frame = bytes(self.usb_inp.read(300, timeout=int(timeout * 1.25)))
+            except usb.core.USBTimeoutError:
+                raise IOError(errno.ETIMEDOUT, os.strerror(errno.ETIMEDOUT))
+            except usb.core.USBError as error:
+                log.error("%r", error)
+                raise IOError(errno.EIO, os.strerror(errno.EIO))
+
+            if len(frame) == 0:
+                log.error("bulk read returned zero data")
+                raise IOError(errno.EIO, os.strerror(errno.EIO))
+
+            log.log(logging.DEBUG - 1, "<<< %s", hexlify(frame).decode())
+            return frame
+
+        def write(self, frame, timeout=0):
+            if self.usb_out is None:
+                return
+
+            log.log(logging.DEBUG - 1, ">>> %s", hexlify(frame).decode())
+            try:
+                # Any message > wMaxPacketSize causes some ACR122U USB subsystem to crash
+                # as seemingly for some reason, lower levels do not chunk the message properly at all times
+                for chunk in chunked(frame, self.usb_out.wMaxPacketSize):
+                    self.usb_out.write(data=bytes(chunk), timeout=timeout)
+                # USB detects end of a message when a packet sent had length < wMaxPacketSize
+                # If a last packet just so happens to be of size == wMaxPacketSize, we have to send an empty packet
+                # to notify the device about the end of transmission
+                if len(frame) % self.usb_out.wMaxPacketSize == 0:
+                    self.usb_out.write(data=b'', timeout=timeout)
+            except usb.core.USBTimeoutError:
+                raise IOError(errno.ETIMEDOUT, os.strerror(errno.ETIMEDOUT))
+            except usb.core.USBError as error:
+                log.error("%r", error)
+                raise IOError(errno.EIO, os.strerror(errno.EIO))
+
+    import nfc.clf.transport as transport
+
+    transport.USB = USB
+
+
+patch_pn532_init_function()
+patch_usb_transport_implementation()
 
 log = logging.getLogger(__name__)
 
