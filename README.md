@@ -71,9 +71,14 @@ Configuration is done via a JSON file `configuration.json`, with the following 4
 * `logging`:
     * level: level to log messages at. All logs related to this codebase use INFO level (20).
 * `nfc`: configuration of the NFC frontend used:
-    * `port`: path to serial port of the connected NFC module;
-    * `driver`: nfcpy driver to use with your device. Implementation was only tested for PN532, other modules have to be verified separately (if supported by nfcpy);
-    * `broadcast`: configures if to use broadcast frames and ECP. If this parameter is true but used NFC device is not based on PN532, will cause an exception to be raised, set to false only if such problems occur;
+  * `path`: full device path, including communication type and driver:
+
+  | Device       | Path example               | Notes                                    |
+  |--------------|----------------------------|------------------------------------------|
+  | PN532 Serial | `tty:usbserial-0001:pn532` | Path specifies port path and driver type | 
+* | ACR122U      | `usb:072f:2200`            | Path specifies vendorId and productId    |
+
+  * `broadcast`: configures if to use broadcast frames and ECP. If this parameter is true but used NFC device is not based on PN532, will cause an exception to be raised, set to false only if such problems occur;
 * `hap`: configuration of the HAP-python library, better left unchanged;
     * `port`: network port of the virtual accessory;
     * `persist`: file to store HAP-python pairing data in.
@@ -143,9 +148,10 @@ Before making a contribution, verify that they were used for best code diffs and
 # Notes
 
 - This code is provided as-is. Considering the sensitive nature of authentication and security, I assume no responsibility for any issues that may arise while using this project;  
-- Information is provided here for learning and DIY purposes only, usage in commercial applications is highly discouraged.
-- Refrain from posting raw logs as they may contain sensitive information, such as reader private key, issuer id's, etc.
+- Information is provided here for learning and DIY purposes only, usage in commercial applications is highly discouraged;
+- Refrain from posting raw logs as they may contain sensitive information, such as reader private key, issuer id's, etc;
 - If you find a bug, feel free to raise an issue;
+- Only support for PN532 is guaranteed, use other devices at your own risk.
 
 # Credits
 

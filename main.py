@@ -6,9 +6,9 @@ import sys
 from pyhap.accessory_driver import AccessoryDriver
 
 from accessory import Lock
-from util.bfclf import BroadcastFrameContactlessFrontend
 from repository import Repository
 from service import Service
+from util.bfclf import BroadcastFrameContactlessFrontend
 
 # By default, this file is located in the same folder as the project
 CONFIGURATION_FILE_PATH = "configuration.json"
@@ -44,7 +44,7 @@ def configure_hap_accessory(config: dict, homekey_service=None):
 
 def configure_nfc_device(config: dict):
     clf = BroadcastFrameContactlessFrontend(
-        path=f"tty:{config['port']}:{config['driver']}",
+        path=config.get("path", None) or f"tty:{config.get('port')}:{config.get('driver')}",
         broadcast_enabled=config.get("broadcast", True),
     )
     return clf

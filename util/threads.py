@@ -4,10 +4,7 @@ import time
 import logging
 
 
-def runner(
-    target, name: str, flag=lambda *args: True, *, delay=0, exception_delay=5
-):
-
+def runner(target, name: str, flag=lambda *args: True, *, delay=0, exception_delay=5):
     self = target.__self__
 
     @functools.wraps(target)
