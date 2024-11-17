@@ -46,9 +46,11 @@ class Service:
         express: bool = True,
         finish: str = "silver",
         flow: str = "fast",
+        throttle_polling = 0.1
     ) -> None:
         self.repository = repository
         self.clf = clf
+        self.throttle_polling = throttle_polling
         self.express = express in (True, "True", "true", "1")
 
         try:
@@ -115,7 +117,10 @@ class Service:
                 flag_2=self.express,
             ).pack(),
         )
+
         if remote_target is None:
+            # Throttle polling attempts to prevent overheating & RF performance degradation
+            time.sleep(max(0, self.throttle_polling - time.monotonic() + start))
             return
 
         target = activate(self.clf, remote_target)

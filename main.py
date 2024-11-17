@@ -57,6 +57,8 @@ def configure_homekey_service(config: dict, nfc_device, repository=None):
         express=config.get("express", True),
         finish=config.get("finish"),
         flow=config.get("flow"),
+        # Poll no more than ~6 times a second by default
+        throttle_polling=float(config.get("throttle_polling") or 0.15),
     )
     return service
 
