@@ -1,3 +1,4 @@
+import functools
 import logging
 
 from pyhap.accessory import Accessory
@@ -23,6 +24,7 @@ class Lock(Accessory):
         self.service.on_endpoint_authenticated = self.on_endpoint_authenticated
         self.add_lock_service()
         self.add_nfc_access_service()
+        self.add_unpair_hook()
 
     def on_endpoint_authenticated(self, endpoint):
         self._lock_target_state = 0 if self._lock_current_state else 1
@@ -32,6 +34,16 @@ class Lock(Accessory):
         self.lock_target_state.set_value(self._lock_target_state, should_notify=True)
         self._lock_current_state = self._lock_target_state
         self.lock_current_state.set_value(self._lock_current_state, should_notify=True)
+
+    def add_unpair_hook(self):
+        unpair = self.driver.unpair
+
+        @functools.wraps(unpair)
+        def patched_unpair(client_uuid):
+            unpair(client_uuid)
+            self.on_unpair(client_uuid)
+
+        self.driver.unpair = patched_unpair
 
     def add_preload_service(self, service, chars=None, unique_id=None):
         """Create a service with the given name and add it to this acc."""
@@ -161,3 +173,7 @@ class Lock(Accessory):
     @property
     def clients(self):
         return self.driver.state.paired_clients
+
+    def on_unpair(self, client_id):
+        log.info(f"on_unpair {client_id}")
+        self._update_hap_pairings()
