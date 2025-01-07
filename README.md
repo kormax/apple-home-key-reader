@@ -57,7 +57,7 @@ Other OS + Python version combos were not verified but may still work.
 
         # macOS
         ls /dev/tty.*
-    3.2. Copy the port without the `tty.` part, insert it into `port` field;  
+    3.2. Copy the port without the `tty.` part, insert it into `path` field;  
     3.3. If you don't use a PN532, set `broadcast` to false and `driver` to appropriate value, otherwise leave as is.
 3. Run application:
     ```
@@ -73,10 +73,10 @@ Configuration is done via a JSON file `configuration.json`, with the following 4
 * `nfc`: configuration of the NFC frontend used:
   * `path`: full device path, including communication type and driver:
 
-  | Device       | Path example               | Notes                                    |
-  |--------------|----------------------------|------------------------------------------|
-  | PN532 Serial | `tty:usbserial-0001:pn532` | Path specifies port path and driver type | 
-* | ACR122U      | `usb:072f:2200`            | Path specifies vendorId and productId    |
+    | Device       | Path example               | Notes                                    |
+    |--------------|----------------------------|------------------------------------------|
+    | PN532 Serial | `tty:usbserial-0001:pn532` | Path specifies port path and driver type | 
+    | ACR122U      | `usb:072f:2200`            | Path specifies vendorId and productId    |
 
   * `broadcast`: configures if to use broadcast frames and ECP. If this parameter is true but used NFC device is not based on PN532, will cause an exception to be raised, set to false only if such problems occur;
 * `hap`: configuration of the HAP-python library, better left unchanged;
