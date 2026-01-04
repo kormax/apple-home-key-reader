@@ -282,7 +282,7 @@ class BERTLV(TLV, Packable, Unpackable):
         if len(data) != length.value:
             raise ValueError("Tag length does not match data size")
         if tag.is_constructed:
-            return BERTLV(tag, length, cls.unpack_array(data[index:]))
+            return BERTLV(tag, length, cls.unpack_array(data))
         else:
             return BERTLV(tag, length, bytes(data))
 
